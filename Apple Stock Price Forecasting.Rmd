@@ -1,0 +1,124 @@
+---
+title: "Forecasting Time Series of Apple Stock"
+author: "Akram Nour"
+date: "2023-03-06"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Forecasting Time Series of Apple Stock Using Univariate Models
+
+```{r}
+library(dplyr)
+AAPL <- read.csv("AAPL (1).csv")
+AAPL$Date <- as.Date(AAPL$Date)
+```
+
+```{r}
+library(forecast)
+
+AAPL.ts <- ts(AAPL$Open, frequency = 12,
+    start = c(1990))
+plot(AAPL.ts, main = "Apple Stock - Monthly Opening Price")
+```
+
+### Creating a time series for Monthly Opening price of Apple stock from 1990 to 2023.
+
+# Data
+
+```{r}
+AAPL.train <- AAPL.ts[1:384] %>% ts(frequency = 12, start = c(1990,1))
+plot(AAPL.train, main = "AAPL Opening Price")
+
+tsdisplay(AAPL.train)
+
+plot(decompose(AAPL.train, type = "multiplicative"))
+
+AAPL$month <- factor(strftime(AAPL$Date,"%b"),levels=month.abb)
+boxplot(AAPL$Open~month,AAPL, main = "AAPL Seasonal Boxplot")
+
+rAAPL.ts <- decompose(AAPL.train, type = "multiplicative")$random
+plot(rAAPL.ts, main = "Random component of AAPL Obtained by Multiplicative Decomposition")
+
+tsdisplay(rAAPL.ts)
+```
+
+### I'm going to set the training set to only include values from 1990 to 2022 so that we can predict monthly opening price from 2022 - 2023 (test). Looking at out the multiplicative decomposition, we can notice a clear upward trend and insignificant seasonality. Looking at the seasonal boxplot, because all months have a similar median and variance, we can confirm that seasonality is not present. Looking at the random component, its ACF starts off with serial autocorrelation in lags 1 through 7 but quickly tapers off. Overall, it looks stationary! Now we can use our univariate models to forecast opening prices.
+
+# ARIMA Model
+
+```{r}
+library(ggplot2)
+
+model <- arima(AAPL.train, order = c(0,1,0))
+tsdisplay(model$residuals[-1])
+
+AIC(model)
+
+pred <- predict(model, n.ahead = 13)
+model.predicted <- pred$pred
+model.predicted.se <- pred$se
+AAPL.Test.real <- AAPL.ts[384:396]
+AAPL.Test.real
+
+
+ggplot(AAPL, aes(x=1:396)) + 
+  geom_line(aes(y=Open)) +
+  geom_line(data=data.frame(model.predicted), aes(x=c(384:396), y = model.predicted, color = "red")) +
+  xlab("Time") + ggtitle("ARIMA Forecast") + theme(legend.position = "none")
+```
+
+# ARIMA + GARCH Model
+
+```{r}
+acf((model$residuals[-1])^2,
+    main = "ARIMA(0,1,0) Residuals^2")
+
+library(fGarch)
+library(tseries)
+
+garch.3 <- garch(model$residuals, order = c(1,1), trace = F)
+AIC(garch.3)
+
+garch.4 <- garch(model$residuals, order = c(0,2), trace = F)
+AIC(garch.4)
+
+help("garchFit")
+
+d1 <- diff(AAPL.train, differences = 1)
+garch.fit <- garchFit(formula = ~arma(0,0)+garch(1,1), data = d1,
+                      trace = F)
+garch.pred <- predict(garch.fit, n.ahead = 12, trace = FALSE, mse = c("cond"))
+garch.forecast <- ts(garch.pred[,1]+garch.pred[,2])
+
+garch.fc.og <- c()
+for(i in 1:13){
+  garch.fc.og[i] <- AAPL.train[384] + 
+    sum(garch.forecast[1:i])
+}
+
+ggplot(AAPL, aes(x = 1:396)) + geom_line(aes(y=Open)) + geom_line(data = data.frame(garch.fc.og), aes(x=c(384:396),
+                                                                                                      y=garch.fc.og, color = "red")) + 
+  xlab("Time") + ggtitle("ARIMA+GARCH Forecast") + theme(legend.position = "none")
+```
+
+# Exponential Smoothing Model
+
+```{r}
+hw1 <- HoltWinters(AAPL.train, gamma = FALSE)
+
+hw1$alpha
+hw1$beta
+
+hw1.pred <- predict(hw1, n.ahead = 13)
+
+hw.table1 <- cbind(as.data.frame(AAPL.Test.real),as.data.frame(hw1.pred)) %>% as.data.frame() %>% dplyr::select("observed" = 1, "predicted" = 2)
+
+ggplot(AAPL, aes(x=1:396)) + geom_line(aes(y=Open)) + geom_line(data=data.frame(hw1.pred),  aes(x=c(384:396), y=hw1.pred, color = "red")) + xlab("Time") + ggtitle("Holt-Winters Forecast") + theme(legend.position = "none")
+
+```
